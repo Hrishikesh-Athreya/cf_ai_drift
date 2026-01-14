@@ -4,7 +4,11 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 https://github.com/user-attachments/assets/a571a785-90de-41f6-bea7-71a12df5e027
 
+## Try it Live
 
+🌍 **[Try the app here](https://cf-ai-roam-planner.pages.dev/)**
+
+**Sample query:** *Plan me a 5 day trip to Italy under 2k focusing on art.*
 
 ## Getting Started
 ### Prerequisites
