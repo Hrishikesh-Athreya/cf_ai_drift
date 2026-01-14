@@ -1,5 +1,11 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Video Demo
+
+https://github.com/user-attachments/assets/a571a785-90de-41f6-bea7-71a12df5e027
+
+
+
 ## Getting Started
 ### Prerequisites
 - [Node.js](https://nodejs.org/) (v18 or higher)
