@@ -1,92 +1,86 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
+### Prerequisites
+- [Node.js](https://nodejs.org/) (v18 or higher)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) (`npm install -g wrangler`)
+- A [Cloudflare account](https://dash.cloudflare.com/sign-up) with Workers & Pages enabled.
 
-First, run the development server:
+### Installation
+1.  **Install Root Dependencies** (Frontend):
+    ```bash
+    npm install
+    ```
+2.  **Install Backend Dependencies**:
+    ```bash
+    cd backend
+    npm install
+    ```
 
+### Backend Deployment
+The backend worker handles the AI logic and workflows. You must deploy it first so the frontend has a binding to connect to.
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd backend
+npx wrangler deploy
 ```
+*Note: This will create the `drift-backend` worker and the necessary KV/Workflow bindings on your Cloudflare account.*
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Run Frontend
+Start the Next.js development server locally. It is configured to connect to your deployed backend.
+```bash
+# Return to root directory
+cd ..
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) to start planning your trip.
 
 ## Cloudflare Architecture
+This project is built to run on Cloudflare's edge infrastructure.
+### 1. LLM
+I use `llama-3.3-70b` as the core intelligence for the application, specifically in `backend/src/trip-workflow.ts` and `src/lib/planner.ts`.
+- **Primary Intelligence**: The Llama 3.3 70B model is invoked via Cloudflare Workers AI to handle complex tasks like itinerary curation and skeleton generation.
+- **Helper Model**: I also utilize Groq as a helper model for initial fast skeleton generation, orchestrating a multi-model approach.
 
-This project is built to run on Cloudflare's edge infrastructure:
+### 2. Workflow
+The application uses **Cloudflare Workflows** to manage the long-running trip generation process.
+- **Implementation**: `TripWorkflow` in `backend/src/trip-workflow.ts` orchestrates the entire durable execution.
+- **Steps**: The workflow is broken down into 4 atomic, retriable steps:
+  1.  `generate-skeleton`
+  2.  `fetch-options`
+  3.  `curate-itinerary`
+  4.  `save-state`
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        User Request                              │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   Cloudflare Pages (Frontend)                    │
-│                     Next.js Application                          │
-│              Serves UI, handles client routing                   │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│               Cloudflare Workflows (Orchestrator)                │
-│                       TripWorkflow                               │
-│    ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
-│    │ generate-   │→ │ fetch-      │→ │ curate-     │→ save      │
-│    │ skeleton    │  │ options     │  │ itinerary   │            │
-│    └─────────────┘  └─────────────┘  └─────────────┘            │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                    ┌───────────┴───────────┐
-                    ▼                       ▼
-┌───────────────────────────┐   ┌───────────────────────────────┐
-│   Workers AI (Llama 3.3)  │   │     Cloudflare KV (State)     │
-│                           │   │                               │
-│ • Skeleton generation     │   │ • Trip plan caching           │
-│ • Itinerary curation      │   │ • Persistent edits            │
-│ • JSON structured output  │   │ • 7-day TTL                   │
-└───────────────────────────┘   └───────────────────────────────┘
-```
+### 3. User Input
+User interaction is handled via a **Next.js** frontend deployed on **Cloudflare Pages**.
+- **Process**: The frontend captures user prompts and sends them to `src/app/api/plan-trip/route.ts`.
+- **Trigger**: This API route then triggers the `TripWorkflow` instance, passing the user's input to start the durable execution on the backend.
 
-### Components
+### 4. Memory/State
+State management and persistence are handled using **Cloudflare KV**.
+- **Persistence**: The `TRIP_CACHE` KV namespace is defined in `backend/wrangler.toml` and is used to durably store the final trip plans.
+- **Retrieval**: The frontend asynchronously retrieves the generated plan by polling `src/app/api/poll-trip/route.ts`, which checks the KV store for the completed result.
 
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **Frontend** | Cloudflare Pages + Next.js | Server-side rendered React app with edge routing |
-| **Orchestrator** | Cloudflare Workflows | Durable, retriable multi-step trip planning |
-| **AI** | Workers AI (Llama 3.3 70B) | On-edge AI inference for skeleton and curation |
-| **State** | Cloudflare KV | Key-value storage for trip plans and edits |
+## How it Works
 
-### API Routes
+The core logic resides in `backend/src/trip-workflow.ts`, which orchestrates a valid, bookable itinerary through a multi-stage workflow:
 
-- `POST /api/plan-trip` - Triggers the TripWorkflow, returns `tripId`
-- `GET /api/poll-trip?tripId=...` - Polls for completed trip plan
-- `POST /api/update-trip` - Persists edits to KV
+### 1. Skeleton Generation (Step 1)
+The workflow parses the user's natural language request (e.g., "10 days in Japan") to generate a **Trip Skeleton**.
+This acts as the structural foundation, breaking the trip into logical city segments (e.g., Tokyo -> Kyoto -> Osaka) with calculated dates. It validates the timeline to ensure the trip is logistically sound before any bookings are looked up.
 
-### Configuration
+### 2. Parallel Data Fetching (Step 2)
+Once the skeleton is set, the workflow enters the `fetch-options` phase. It executes a **Parallel Search strategy** using `Promise.allSettled` to query multiple providers simultaneously without blocking:
+- **Accommodation**: Fetches real placements from **Airbnb** and **Booking.com**.
+- **Activities**: Retrieves real-time availability from **Klook** and **Headout**.
+- **Geocoding**: Resolves coordinates for all items to ensure they can be placed accurately on the map.
 
-See `wrangler.toml` for Cloudflare bindings:
-- `TRIP_CACHE` - KV namespace for caching
-- `AI` - Workers AI binding
-- `TRIP_WORKFLOW` - Workflow binding
+### 3. AI Curation (Step 3)
+In the final `curate-itinerary` step, the LLM assumes the role of a "**Master Travel Curator**".
+It consumes the verified data from Step 2 and the constraints from Step 1. Using a monolithic prompt strategy, it intelligently selects the best combination of hotels and activities for each day, enforcing logic like:
+- "Check-in" acts as the first item upon arrival in a new city.
+- No duplicate activities across days.
+- Logical sequencing of events (morning/afternoon/evening).
+The result is a final, highly structured JSON object that is ready for the frontend.
 
 ## Deploy on Cloudflare
 
